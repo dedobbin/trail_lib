@@ -21,7 +21,7 @@ void Game::go()
 	Visuals* visuals = new Visuals();
 
 	/* init all lib specific renderers */	
-	visuals->addRenderPrio("DEFAULT", 20);
+	visuals->addRenderPrio("CONTENT", 20);
 	visuals->addRenderPrio("CONVO", 40);
 	visuals->addRenderPrio("INVENTORY", 60);
 	visuals->addRenderPrio("FADE_OUT", 80);

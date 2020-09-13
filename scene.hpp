@@ -7,11 +7,6 @@
 #include "inventory.hpp"
 #include <map>
 
-/* optional to use for client */
-#define VIEW_PORT_FULL_SCREEN {0, 0, SCREEN_W, SCREEN_H}
-#define VIEW_PORT_DEFAULT_CONVO_BAR {0, SCREEN_H - SCREEN_H/6, SCREEN_W, SCREEN_H /6}
-#define VIEW_PORT_DEFAULT_STATUS_BAR {0, 0, SCREEN_W, SCREEN_H/9}
-
 class Scene
 {
 	public:
@@ -36,7 +31,7 @@ class Scene
 		void resetPromptText(Visuals* visuals);
 		void setBackground(std::string path);
 		
-		void startConvo(int id, Visuals* v, SDL_Rect viewPort);
+		void startConvo(int id, Visuals* v, SDL_Rect viewPort = VIEW_PORT_DEFAULT_CONVO_BAR);
 		void endConvo(Visuals* v);
 		void setActiveConvoText(int id, Visuals* v);
 

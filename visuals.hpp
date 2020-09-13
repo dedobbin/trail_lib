@@ -12,7 +12,7 @@
 #include "action.hpp"
 
 #define SCREEN_W 1024
-#define SCREEN_H 768
+#define SCREEN_H 981
 
 #define FONT_CHAR_W_H_RATIO 2
 #define DEFAULT_FONT_CHARACTER_W SCREEN_W / 75
@@ -27,6 +27,11 @@
 #define COLOR_SELECTION {255, 0, 255}
 
 #define DEFAULT_TEXT_PADDING 10
+
+/* optional to use for client */
+#define VIEW_PORT_FULL_SCREEN {0, 0, SCREEN_W, SCREEN_H}
+#define VIEW_PORT_DEFAULT_CONVO_BAR {0, SCREEN_H - SCREEN_H/6, SCREEN_W, SCREEN_H /6}
+#define VIEW_PORT_DEFAULT_STATUS_BAR {0, 0, SCREEN_W, SCREEN_H/9}
 
 enum Direction{
 	UP,
@@ -52,13 +57,22 @@ typedef struct Background{
 class Renderer
 {
 	public:
-		Renderer(SDL_Rect viewPort);
+		Renderer(
+			SDL_Rect viewPort = VIEW_PORT_FULL_SCREEN, 
+			Background* bg = NULL, 
+			std::vector<Sprite*>* sprites = NULL, 
+			std::unordered_map<std::string, SDL_Texture*>* spriteSheets = NULL
+		);
 		~Renderer();
+		
+		/* Should be overwritten by children */
+		virtual void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f);
+		
 		void renderBackground(SDL_Renderer* r);
+		const void renderSprites(SDL_Renderer* r) const;
 		void scrollBackground(Direction direction, int n);
-		virtual void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f) = 0;
 		static SDL_Texture* loadTexture(std::string path, SDL_Renderer* r);
-		const SDL_Rect viewPort;
+		const SDL_Rect viewPort = VIEW_PORT_FULL_SCREEN;
 	protected:
 		/* returns width in pixels of text drawn */
 		const int renderText(std::string text, SDL_Color color, int x, int y, int h, SDL_Renderer* r, TTF_Font* f, bool ignoreViewPort = false) const;
@@ -71,17 +85,7 @@ class Renderer
 		static SDL_Texture* surfaceToTexture(SDL_Surface*);
 		static SDL_Surface* createSurface(int w, int h);
 		SDL_Texture* backgroundTexture = NULL;
-};
-
-class DefaultRenderer : public Renderer
-{
-	public:
-		DefaultRenderer(Background* background, std::vector<Sprite*>* sprites, std::unordered_map<std::string, SDL_Texture*>* spriteSheet, SDL_Rect viewPort);
-		~DefaultRenderer();
-		void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f);
-	private:
 		std::vector<Sprite*>* sprites;
-		const void renderSprites(SDL_Renderer* r) const;
 		std::unordered_map<std::string, SDL_Texture*>* spriteSheets;
 };
 

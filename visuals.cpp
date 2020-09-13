@@ -40,14 +40,34 @@ std::pair<int, int> Visuals::imageSize(std::string path)
 	return {ntohl(w), ntohl(h)};
 }
 
-Renderer::Renderer(SDL_Rect viewPort)
-:viewPort(viewPort)
-{}
+Renderer::Renderer(SDL_Rect viewPort, Background* _background, std::vector<Sprite*>* sprites, std::unordered_map<std::string, SDL_Texture*>* spriteSheets)
+:viewPort(viewPort), sprites(sprites), spriteSheets(spriteSheets)
+{
+	if (_background){
+		_background->dst = {0, 0, viewPort.w, viewPort.h};
+		background = _background;
+	}
+}
 
 Renderer::~Renderer()
 {
-	SDL_DestroyTexture(backgroundTexture);
-	backgroundTexture = NULL;
+	/* bg is owned by scene, don't free here */
+	// if (background){
+	// 	delete(background);
+	// 	background = NULL;
+	// }
+	
+	if (backgroundTexture){
+		SDL_DestroyTexture(backgroundTexture);
+	}
+	
+	/* sprites are owned by scene, don't free here */
+	// if (sprites){
+	// 	for (auto sprite : *sprites){
+	// 		delete(sprite);
+	// 	}
+	// 	sprites = NULL;
+	// }	
 }
 
 void Renderer::loadBackgroundTexture(SDL_Renderer* _r)
@@ -98,8 +118,6 @@ const int Renderer::renderText(std::string text, SDL_Color color, int x, int y, 
 	if (!ignoreViewPort){
 		x+= viewPort.x;
 		y+= viewPort.y;
-	} else {
-		std::cout << "DEBUG: sdfds" << std::endl;
 	}
 
 	int textW = text.length() * getRelativeCharW(h);
@@ -144,15 +162,10 @@ void Renderer::scrollBackground(Direction direction, int n)
 	}
 }
 
-DefaultRenderer::~DefaultRenderer()
+const void Renderer::renderSprites(SDL_Renderer* _r) const
 {
-	for (auto sprite : *sprites){
-		delete(sprite);
-	}	
-}
-
-const void DefaultRenderer::renderSprites(SDL_Renderer* _r) const
-{
+	if (!sprites)	return;
+	
 	for (auto& it: *sprites){
 
 		/* calc offset based on viewport */
@@ -278,7 +291,8 @@ void ConvoRenderer::renderConvo(SDL_Renderer* _r, TTF_Font* _f)
 	int lineOffset = 0;
 	for(auto line : convoLines){
 		int len = renderText(
-			line.substr(0, currentRenderedConvoChars - lineOffset), COLOR_DEFAULT, 
+			line.substr(0, currentRenderedConvoChars - lineOffset), 
+			COLOR_DEFAULT, 
 			convoBox.x,
 			convoBox.y + i * fontH, 
 			fontH,
@@ -347,7 +361,7 @@ void ConvoRenderer::renderConvo(SDL_Renderer* _r, TTF_Font* _f)
 
 void Renderer::renderBackground(SDL_Renderer* _r)
 {
-	if (!background) return;
+	if (!background || background->path == "") return;
 	
 	if (!backgroundTexture){
 		loadBackgroundTexture(_r);
@@ -553,6 +567,7 @@ bool Visuals::render() const
 	for (auto renderer : renderers){
 		renderer.second->renderSpecifics(_w, _r, _f);
 		renderer.second->renderBackground(_r);
+		renderer.second->renderSprites(_r);
 	}
 	renderPresent();
 }
@@ -627,6 +642,10 @@ bool Visuals::hasRenderer(std::string rName)
 	return renderers.find(key) != renderers.end();
 }
 
+void Renderer::renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f)
+{}
+
+
 const int Renderer::getRelativeCharW(int charH) const
 {
 	return charH / FONT_CHAR_W_H_RATIO;
@@ -635,19 +654,6 @@ const int Renderer::getRelativeCharW(int charH) const
 const int Renderer::getRelativeCharH(int charW) const
 {
 	return charW * FONT_CHAR_W_H_RATIO;
-}
-
-DefaultRenderer::DefaultRenderer(Background* _background, std::vector<Sprite*>* sprites, std::unordered_map<std::string, SDL_Texture*>* spriteSheet, SDL_Rect viewPort)
-: Renderer(viewPort), sprites(sprites), spriteSheets(spriteSheet)
-{
-	//TODO: messy that background is set in parent renderer??
-	_background->dst = {0, 0, viewPort.w, viewPort.h};
-	Renderer::background = _background;
-}
-
-void DefaultRenderer::renderSpecifics(SDL_Window* _w, SDL_Renderer* _r, TTF_Font* _f)
-{
-	renderSprites(_r);
 }
 
 ConvoRenderer::ConvoRenderer(int* selectedAnswer, SDL_Rect viewPort, int textPadding)
