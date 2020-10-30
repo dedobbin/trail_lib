@@ -10,13 +10,9 @@
 #include<map>
 
 #include "action.hpp"
-
-#define SCREEN_W 1024
-#define SCREEN_H 981
-
-#define FONT_CHAR_W_H_RATIO 2
-#define DEFAULT_FONT_CHARACTER_W SCREEN_W / 75
-#define DEFAULT_FONT_H DEFAULT_FONT_CHARACTER_W * FONT_CHAR_W_H_RATIO
+#include "type.hpp"
+#include "character.hpp"
+#include "location.hpp"
 
 //Controls how fast speed draws
 #define DEFAULT_TEXT_SPEED_DIVIDER 1
@@ -28,10 +24,10 @@
 
 #define DEFAULT_TEXT_PADDING 10
 
-/* optional to use for client */
-#define VIEW_PORT_FULL_SCREEN {0, 0, SCREEN_W, SCREEN_H}
-#define VIEW_PORT_DEFAULT_CONVO_BAR {0, SCREEN_H - SCREEN_H/6, SCREEN_W, SCREEN_H /6}
-#define VIEW_PORT_DEFAULT_STATUS_BAR {0, 0, SCREEN_W, SCREEN_H/9}
+inline bool operator==(const SDL_Rect& a, const SDL_Rect& b)
+{
+    return a.x==b.x && a.y==b.y && a.w==b.w && a.h==b.h;
+}
 
 enum Direction{
 	UP,
@@ -43,91 +39,109 @@ enum Direction{
 typedef struct Sprite{
 	SDL_Rect src;
 	SDL_Rect dst;
-	std::string spriteSheet;
+	std::string spriteSheetPath;
 	SDL_RendererFlip flip = SDL_FLIP_NONE;
 } Sprite;
 
-typedef struct Background{
-	std::string path;
-	SDL_Rect src = {0, 0, SCREEN_W, SCREEN_H};
-	SDL_Rect dst = {0, 0, SCREEN_W, SCREEN_H};
-} Background;
 
+class Background{
+	public:
+		Background(std::string path, SDL_Rect src);
+		Background(Background* background);
+		const std::string path;
+		const SDL_Rect src;
+		SDL_Rect dst;
+		/* if solidColor is true, will ignore texture and draw color */
+		bool solidColor = false;
+		SDL_Color color = {255, 0, 255, 255};
+};
 
 class Renderer
 {
 	public:
+		/* bg is double ptr, so the list entry its pointing to can later be inserted */
+		/* same for sprites. this way they can be added after init is done */
 		Renderer(
-			SDL_Rect viewPort = VIEW_PORT_FULL_SCREEN, 
-			Background* bg = NULL, 
-			std::vector<Sprite*>* sprites = NULL, 
-			std::unordered_map<std::string, SDL_Texture*>* spriteSheets = NULL
+			rendererType_t type,
+			SDL_Rect viewPort, 
+			std::vector<Sprite*>* sprites = NULL
 		);
 		~Renderer();
 		
 		/* Should be overwritten by children */
 		virtual void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f);
 		
+		void loadBackgroundTexture(SDL_Renderer* r);
 		void renderBackground(SDL_Renderer* r);
 		const void renderSprites(SDL_Renderer* r) const;
-		void scrollBackground(Direction direction, int n);
-		static SDL_Texture* loadTexture(std::string path, SDL_Renderer* r);
-		const SDL_Rect viewPort = VIEW_PORT_FULL_SCREEN;
+		const SDL_Rect viewPort;
+		
+		void setBackground(Background* background);
+		void setBackgroundScroll(int speed, Direction dir = LEFT);
+
+		void DEBUG_setCurPos(SDL_Rect pos, bool print = false);
+
+		const rendererType_t type;
+
+		SDL_Rect DEBUG_prevPos;
+
 	protected:
 		/* returns width in pixels of text drawn */
-		const int renderText(std::string text, SDL_Color color, int x, int y, int h, SDL_Renderer* r, TTF_Font* f, bool ignoreViewPort = false) const;
+		const SDL_Rect renderText(std::string text, SDL_Color color, int x, int y, SDL_Renderer* r, TTF_Font* f) const;
 
 		const int getRelativeCharW(int charH) const;
 		const int getRelativeCharH(int charW) const;
-		Background* background = NULL;
 	private:
-		void loadBackgroundTexture(SDL_Renderer* r);
 		static SDL_Texture* surfaceToTexture(SDL_Surface*);
 		static SDL_Surface* createSurface(int w, int h);
-		SDL_Texture* backgroundTexture = NULL;
+		Background* background = NULL;
 		std::vector<Sprite*>* sprites;
-		std::unordered_map<std::string, SDL_Texture*>* spriteSheets;
+		Direction backgroundScrollDir;
+		int backgroundScrollSpeed = 0;
+		bool ignoreViewPort = false;
 };
 
 class ConvoRenderer : public Renderer
 {
 	public: 
-		ConvoRenderer(int* selectedAnswer, SDL_Rect viewPort, int textPadding = DEFAULT_TEXT_PADDING);
+		ConvoRenderer(int* selectedAnswer, SDL_Rect viewPort, int textPaddingX = DEFAULT_TEXT_PADDING);
 		void setText(std::string text, std::map<int, std::string> answers, bool prompt = false, int renderSpeedDivider = DEFAULT_TEXT_SPEED_DIVIDER);
 		void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f);
 		void setPromptText(std::string text);
-		const int textPadding;
-	private:
-		int fontH;
-		int characterW;
-		int convoBoxH;
-		SDL_Rect convoBox;
+		bool entireConvoTextIsRendered() const;
 
+		/* Controls how fast convo text is draw, 1 is fastest, 0 will be used to display text instantly */
+		int renderSpeedDivider = DEFAULT_TEXT_SPEED_DIVIDER;
+		int textPadding = 5;
+		int delayAfterConvoRendered = 10;
+
+	private:
 		std::string text;
 		std::map<int, std::string> answers;
 		std::string promptText = "";
 		void renderConvo(SDL_Renderer* r, TTF_Font* _f);
 		int* selectedAnswer;
 		void resetConvoTextRender();
-		/* Controls how fast convo text is draw, 1 is fastest, 0 will be used to display text instantly */
-		int renderSpeedDivider = DEFAULT_TEXT_SPEED_DIVIDER;
 		bool prompt = false;
 };
 
 class InventoryRenderer : public Renderer
 {
 	public:
-	 	InventoryRenderer(Inventory* inventory, int* selectedAnswer, bool* itemIsSelected, SDL_Rect viewPort, int TextPadding = DEFAULT_TEXT_PADDING);
+	 	InventoryRenderer(Inventory* inventory, int* selectedAnswer, SDL_Rect viewPort);
 		void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f);
+		int textPaddingY = 0;
+		int textPaddingX = 0;
+		SDL_Rect submenuPos;
+		SDL_Rect infoPos;
+
 	private:
 		Inventory* inventory;
 		const void renderInventory(SDL_Renderer* r, TTF_Font* _f) const;
-		/* Needs to be overloaded so a client can decide if is player, party, or whatever,this determines what is done when item is selected in inventory */
-		virtual const void renderItemIsSelected(SDL_Renderer* _r, TTF_Font* _f) const = 0;
+		const void renderSubmenu(SDL_Renderer* _r, TTF_Font* _f) const;
+		const void renderItemInfo(SDL_Renderer* _r, TTF_Font* _f) const;
 	protected:
 		int* selectedAnswer;
-		bool* itemIsSelected;
-		int textPadding = 0;
 };
 
 class TransitionRenderer : public Renderer
@@ -142,6 +156,45 @@ class TransitionRenderer : public Renderer
 		int counter = 0;	
 		ChangeSceneAction* a;
 		const uint8_t length;
+};
+
+/**
+ * Renders weather effect and time of day
+ * When extending and overloading renderSpecifics, 
+ * 	should call parent
+ */
+class AtmosphereRenderer : public Renderer
+{
+	public:
+		AtmosphereRenderer(SDL_Rect viewPort, LocationData* locationData);
+		void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f);
+		/* returns false if nothing is done, that way children can act if they so please */
+		bool renderWeather(SDL_Window* w, SDL_Renderer* r);
+		int animationSpeedDivider = 7;
+		bool animationPaused = false;
+	protected:
+		LocationData* locationData = NULL;
+		int counter = 0;
+		std::vector<SDL_Point> points;
+	private:
+		void animationStep();
+};
+
+class StatusBarRenderer : public Renderer
+{
+	public:
+		StatusBarRenderer(SDL_Rect viewPort, std::string locationName, Character* player = NULL);
+		void renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f);
+		void setBlackout(bool blackout = true);
+	private:
+		/* should be overloaded by children, but falls back to drawing player status (if player was not set, rip) */
+		virtual void renderStatusBarSpecific(SDL_Renderer*_r, TTF_Font* _f, int x = 0, int y = 0);
+
+		void renderStatusBar(SDL_Renderer* r, TTF_Font* _f);
+		void renderPlayerStatus(SDL_Renderer*_r, TTF_Font* _f, int x = 0, int y = 0);
+		std::string locationName;
+		bool blackout = false;
+		Character* player = NULL;
 };
 
 class FadeoutRenderer : public Renderer
@@ -161,8 +214,14 @@ class FadeoutRenderer : public Renderer
 class Visuals
 {
 	public:
-		Visuals();
+		Visuals(int screenW, int screenH, std::string fontPath, int fontSize);
 		~Visuals();
+        void setScreenSize(int w, int h);
+        std::pair<int, int> getScreenSize();
+
+
+		/* Client should set this in Game::setDefaultRendererBackgrounds overload, when key of renderer in here, it will always use this bg */
+		static std::unordered_map<rendererType_t, Background*> defaultRendererBackgrounds;
 
 		/* When adding, removing, getting of checking for specific renderer, make sure it's in renderPrioMap, should be done in Game::SpecificInit() */
 		void addRenderer (std::string rName, Renderer* renderer);
@@ -172,13 +231,36 @@ class Visuals
 		void removeAllRenderers();
 
 		bool render() const;
-		void loadSpriteSheet(std::string name, std::string path);
-		std::unordered_map<std::string, SDL_Texture*> spriteSheets;
-		bool entireConvoTextIsRendered() const;
 		
 		bool addRenderPrio(std::string rendererName, int prio);
 
 		static std::pair<int, int> imageSize(std::string path);
+
+		static Background* createBackground(std::string path);
+
+		static int renderCircle(SDL_Renderer* renderer, int x, int y, int radius);
+
+		/* lazy loads, gets from backgroundTextureMap, if its not there checks HD, if renderer is passed */
+		static SDL_Texture* loadBackgroundTexture(std::string path, SDL_Renderer* _r = NULL);
+		/* lazy loads */
+		static SDL_Texture* loadSpriteSheetTexture(std::string path, SDL_Renderer* _r = NULL);
+
+		static SDL_Texture* loadTexture(std::string path, SDL_Renderer* r);
+		static std::vector<std::string> breakLines(TTF_Font* _f, std::string text, SDL_Rect viewPort, int textPaddingX = 0);
+
+
+        int screenW;
+        int screenH; 
+        std::string fontPath;
+        int fontSize;
+
+        /* optional to use for client, sizes set in setScreenSize() */
+        static SDL_Rect VIEW_PORT_FULL_SCREEN;
+        static SDL_Rect VIEW_PORT_DEFAULT_CONVO_BAR;
+        static SDL_Rect VIEW_PORT_DEFAULT_STATUS_BAR;
+        static SDL_Rect VIEW_PORT_DEFAULT_INVENTORY;
+        static SDL_Rect VIEW_PORT_DEFAULT_CONTENT;
+
 	private:
 		std::map<sceneType_t, int> renderPrioMap;
 		std::map<int, Renderer*> renderers;
@@ -189,6 +271,10 @@ class Visuals
 		bool initSDL();
 		const void renderClear() const;
 		void renderPresent() const;
+		/* key = path */
+		static std::unordered_map<std::string, SDL_Texture*> backgroundTextureMap;
+		/* key = path */
+		static std::unordered_map<std::string, SDL_Texture*> spriteSheetTextureMap;
 };
 
 #endif

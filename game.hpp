@@ -7,23 +7,34 @@
 
 class Game{
 	public:
+        Game(int screenW = 1280, int screenH = 720, std::string fontPath ="assets/font.ttf", int fontH = 24);
 		void go();
 	private:
+		/*** interface ***/
+		/* Called when game starts, or restarts from game over, returns first scene to load */
+		virtual ChangeSceneAction* specificInit(Visuals* visuals) = 0;
+		virtual void handleActionsSpecific(Visuals* visuals) = 0;
+		virtual void setupScenes(Visuals* visuals) = 0;
+		virtual void setDefaultRendererBackgrounds(Visuals* visuals) = 0;
+		virtual void setSpecificRenderPrio(Visuals* visuals) = 0;
+		virtual void specificDestroy() = 0;
+
+		/* When set, next scene will be loaded after all actions are handled */
+		ChangeSceneAction* nextScene = NULL;
+
 		LazyFooTimer capTimer;
 		LazyFooTimer fpsTimer;
 
-		/* Called when game starts, or restarts from game over, returns first scene to load */
-		virtual ChangeSceneAction* specificInit(Visuals* visuals) = 0;
 		/* Should return false to end game */
 		virtual bool handleActions(Visuals* visuals);
 
-		virtual void handleActionsSpecific(Visuals* visuals) = 0;
-		virtual void specificDestroy() = 0;
+        Visuals* visuals = NULL;
+
 	protected:
 		bool initialized = false;
 		Scene* currentScene = NULL;
 		int countedFrames = 0;
-		void loadScene(ChangeSceneAction* args, Visuals* v);
+		void setActiveScene(ChangeSceneAction* action);
 };
 
 #endif

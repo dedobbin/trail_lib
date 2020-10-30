@@ -9,24 +9,89 @@
 #include <sstream>
 #include <algorithm>
 #include <iterator>
+#include <assert.h>
 #include <arpa/inet.h> //ntohl
 #include <dump_lib.hpp>
 
 #include "visuals.hpp"
 #include "time.hpp"
 
-#define BLINK_DIVIDER 20
-static bool renderBlink = false;
-
-//TODO: maybe wrap in struct, together with convobox
+/* stuff for convo renderer */
 static int counter = 0;
 static int currentRenderedConvoChars = 0;
 static std::vector<std::string> convoLines;
 bool entireConvoTextRendered = false;
+SDL_Rect convoSrcRect = {0, 0, 0, 0};
+std::vector<int> currentRenderedConvoCharsOnLine;
+int currentConvoLine = 0;
 
 /* after all convo text is rendered, some delay before being able to continue */
-static int ticksAfterAllConvoRendered = 0;
-#define DELAY_AFTER_CONVO_RENDERERED 10
+int ticksAfterAllConvoRendered = 0;
+
+/* blink cursor arrow thing */
+#define BLINK_DIVIDER 20
+static bool renderBlink = false;
+
+
+Background::Background(std::string path, SDL_Rect src)
+:path(path), src(src)
+{}
+
+Background::Background(Background* _background)
+:path(_background->path), src(_background->src)
+{}
+
+std::vector<std::string> specialTokens = {"<br/>"};
+
+/* init static stuff */
+std::unordered_map<rendererType_t, Background*> Visuals::defaultRendererBackgrounds = {};
+std::unordered_map<std::string, SDL_Texture*> Visuals::backgroundTextureMap = {};
+std::unordered_map<std::string, SDL_Texture*> Visuals::spriteSheetTextureMap = {};
+
+int Visuals::renderCircle(SDL_Renderer* renderer, int x, int y, int radius)
+{
+   	int offsetx, offsety, d;
+    int status;
+
+    offsetx = 0;
+    offsety = radius;
+    d = radius -1;
+    status = 0;
+
+    while (offsety >= offsetx) {
+
+        status += SDL_RenderDrawLine(renderer, x - offsety, y + offsetx,
+                                     x + offsety, y + offsetx);
+        status += SDL_RenderDrawLine(renderer, x - offsetx, y + offsety,
+                                     x + offsetx, y + offsety);
+        status += SDL_RenderDrawLine(renderer, x - offsetx, y - offsety,
+                                     x + offsetx, y - offsety);
+        status += SDL_RenderDrawLine(renderer, x - offsety, y - offsetx,
+                                     x + offsety, y - offsetx);
+
+        if (status < 0) {
+            status = -1;
+            break;
+        }
+
+        if (d >= 2*offsetx) {
+            d -= 2*offsetx + 1;
+            offsetx +=1;
+        }
+        else if (d < 2 * (radius - offsety)) {
+            d += 2 * offsety - 1;
+            offsety -= 1;
+        }
+        else {
+            d += 2 * (offsety - offsetx - 1);
+            offsety -= 1;
+            offsetx += 1;
+        }
+    }
+
+    return status;
+}
+
 
 std::pair<int, int> Visuals::imageSize(std::string path)
 {
@@ -40,27 +105,22 @@ std::pair<int, int> Visuals::imageSize(std::string path)
 	return {ntohl(w), ntohl(h)};
 }
 
-Renderer::Renderer(SDL_Rect viewPort, Background* _background, std::vector<Sprite*>* sprites, std::unordered_map<std::string, SDL_Texture*>* spriteSheets)
-:viewPort(viewPort), sprites(sprites), spriteSheets(spriteSheets)
+Background* Visuals::createBackground(std::string path)
 {
-	if (_background){
-		_background->dst = {0, 0, viewPort.w, viewPort.h};
-		background = _background;
-	}
+	auto size = Visuals::imageSize(path);
+	return new Background(path, {0, 0, size.first, size.second});
 }
 
+Renderer::Renderer(rendererType_t type, SDL_Rect viewPort, std::vector<Sprite*>* sprites)
+:viewPort(viewPort), sprites(sprites), type(type)
+{}
+
 Renderer::~Renderer()
-{
-	/* bg is owned by scene, don't free here */
-	// if (background){
-	// 	delete(background);
-	// 	background = NULL;
-	// }
-	
-	if (backgroundTexture){
-		SDL_DestroyTexture(backgroundTexture);
+{	
+	if (background){
+		delete(background);
 	}
-	
+
 	/* sprites are owned by scene, don't free here */
 	// if (sprites){
 	// 	for (auto sprite : *sprites){
@@ -70,96 +130,108 @@ Renderer::~Renderer()
 	// }	
 }
 
-void Renderer::loadBackgroundTexture(SDL_Renderer* _r)
+void Renderer::setBackground(Background* bg)
 {
-	if (!_r) throw std::runtime_error("Trying to set bg texture but SDL_Renderer is not set");
-	struct stat buffer;
-	bool fileExists =  (stat (background->path.c_str(), &buffer) == 0);
-	if (!fileExists){
-		std::cerr << "Unable to load background from: " << background->path << std::endl;
-		exit(1);
-	} else {
-		if (backgroundTexture)	SDL_DestroyTexture(backgroundTexture);
-
-		backgroundTexture = Renderer::loadTexture(background->path, _r);
+	if (background){
+		free(background);
 	}
+	background = bg;
+	background->dst = {0, 0, viewPort.w, viewPort.h};
+}
+
+SDL_Texture* Visuals::loadBackgroundTexture(std::string path, SDL_Renderer* _r)
+{
+	if (backgroundTextureMap.count(path) > 0){
+		return backgroundTextureMap[path];
+	} else if (_r){
+		struct stat buffer;
+		bool fileExists =  (stat (path.c_str(), &buffer) == 0);
+		if (fileExists){
+			auto tex = Visuals::loadTexture(path, _r);
+			backgroundTextureMap[path] = tex;
+			return tex;
+		}
+	}
+	std::string errorStr = "Unable to load background \"" + path + "\" from" + (_r ?  " disk" : "backgroundTextureMap");
+	std::cerr << errorStr << std::endl;
+	exit(1);
+	return NULL;
+}
+
+SDL_Texture* Visuals::loadSpriteSheetTexture(std::string path, SDL_Renderer* _r)
+{
+	if (Visuals::spriteSheetTextureMap.find(path) != Visuals::spriteSheetTextureMap.end()){
+		return spriteSheetTextureMap[path];
+	} else if (_r){
+		struct stat buffer;
+		bool fileExists =  (stat (path.c_str(), &buffer) == 0);
+		if (fileExists){
+			auto tex = Visuals::loadTexture(path, _r);
+			spriteSheetTextureMap[path] = tex;
+			return tex;
+		}
+	}
+	std::string errorStr = "Unable to load spritesheet \"" + path + + "\" from " + (_r ?  " disk" : "spriteSheetTextureMap");
+	std::cerr << errorStr << std::endl;
+	exit(1);
+	return NULL;
 }
 
 const void InventoryRenderer::renderInventory(SDL_Renderer* _r, TTF_Font* _f) const
 {
-	//TODO: make transparent optional
-	SDL_SetRenderDrawColor( _r, 0, 0, 0, 255 );
-	SDL_RenderFillRect( _r, &viewPort );
-
-	int y = textPadding;
-	int x = textPadding;
+	int y = textPaddingY;
+	int x = textPaddingX;
+	int h;
 	SDL_Color c;
-	int fontH = DEFAULT_FONT_H; 
 	int j = 0;
 	for (auto it : inventory->getItems()){
-		Item* item = it.second.first;
 		int amount = it.second.second;
 		c = COLOR_DEFAULT;
-		if (!*itemIsSelected && *selectedAnswer == j){
+		if (inventory->submenuIsOpen()){
+			if (it.second.first == inventory->itemWithSubMenuOpen){
+				c = COLOR_SELECTION;
+			}
+		} else if (*selectedAnswer == j){
 			c = COLOR_SELECTION;
+			
 		}
-		renderText(item->type, c, x, y, fontH, _r, _f);
-		renderText(std::to_string(amount), COLOR_DEFAULT, x + 180, y, fontH, _r, _f);
-		y += fontH;
+
+		auto item = it.second.first;
+		SDL_Rect dst = renderText(item->type, c, x, y, _r, _f);
+		renderText(std::to_string(amount), COLOR_DEFAULT, viewPort.w / 2, y, _r, _f);
+		y += dst.h;
 		j++;
-	}
-	if (*itemIsSelected){
-		renderItemIsSelected(_r, _f);
 	}
 }
 
-const int Renderer::renderText(std::string text, SDL_Color color, int x, int y, int h, SDL_Renderer* _r, TTF_Font* _f, bool ignoreViewPort) const
+const SDL_Rect Renderer::renderText(std::string text, SDL_Color color, int x, int y, SDL_Renderer* _r, TTF_Font* _f) const
 {
 	if (!ignoreViewPort){
 		x+= viewPort.x;
 		y+= viewPort.y;
-	}
+	};
 
-	int textW = text.length() * getRelativeCharW(h);
-	SDL_Rect textRect = {x, y, textW, h};
+	SDL_Rect dst = {x, y, 0, 0};
+	TTF_SizeText(_f,text.c_str(),&dst.w,&dst.h);
+
 	if (x < viewPort.x 
-		|| textRect.x + textRect.w > viewPort.x + viewPort.w
+		|| dst.x + dst.w > viewPort.x + viewPort.w
 		|| y < viewPort.y 
-		|| textRect.y + textRect.h > viewPort.y + viewPort.h
+		|| dst.y + dst.h > viewPort.y + viewPort.h
 
 	){
-		std::cerr << "renderText: outside of viewport" << std::endl;
-		return 0;
+		std::cerr << "renderText: outside of viewport (" << text << ")" << std::endl;
+		return {0,0,0,0};
 	}
 
 	SDL_Surface* textSurface = TTF_RenderText_Solid(_f, text.c_str(), color);
 	SDL_Texture* textTexture = SDL_CreateTextureFromSurface(_r, textSurface);
 
-	SDL_RenderCopy(_r, textTexture, NULL, &textRect); 
+	SDL_RenderCopy(_r, textTexture, NULL, &dst); 
 	SDL_FreeSurface(textSurface);
 	SDL_DestroyTexture(textTexture);
-	return textW;		
-}
-
-void Renderer::scrollBackground(Direction direction, int n)
-{	
-	/* renderBackground will take care of tiling + reseting pos when needed, so don't worry about it here */
-	switch (direction){
-		case (RIGHT):
-			background->dst.x += n;
-			break;
-		case (DOWN):
-			background->dst.y += n;
-			break;
-		case (LEFT):
-			background->dst.x -= n;
-			break;
-		case (UP):
-			background->dst.y -= n;
-			break;
-		default:
-			std::cerr << "moving background unknown direction " << std::endl;
-	}
+	
+	return dst;		
 }
 
 const void Renderer::renderSprites(SDL_Renderer* _r) const
@@ -211,160 +283,208 @@ const void Renderer::renderSprites(SDL_Renderer* _r) const
 				}
 			}
 			
-			SDL_Texture* texture = (*spriteSheets)[it->spriteSheet];
+			SDL_Texture* texture = Visuals::loadSpriteSheetTexture(it->spriteSheetPath, _r);
 			if (SDL_RenderCopyEx( _r, texture, &src, &dst , NULL, NULL, it->flip) < 0){
-				std::cerr << "Tried to render sprite from non-existing spritesheet: '" <<it->spriteSheet << "'" << std::endl;
+				std::cerr << "Tried to render sprite from non-existing spritesheet: '" << it->spriteSheetPath << "'" << std::endl;
 			}	
 		}
 	}
 }
 
-bool Visuals::entireConvoTextIsRendered() const
+
+std::vector<std::string> Visuals::breakLines(TTF_Font* _f, std::string text, SDL_Rect viewPort, int textPaddingX)
 {
-	return entireConvoTextRendered;
+	std::vector<std::string> result;
+	auto words = dump_lib::str_split(text, ' ');
+	int j = 0;
+	int curLen = 0;
+	int curLine = 0;
+	result.push_back("");
+	int lineOffset = 0;
+
+	int curLineW = 0;
+	for (auto it = words.begin(); it != words.end(); it++ ){
+		int wordW;
+		TTF_SizeText(_f, (*it + " ").c_str(), &wordW, NULL);
+		if (*it == "<br/>" || curLineW + wordW > viewPort.w - textPaddingX){
+			curLine++;
+			currentRenderedConvoCharsOnLine.push_back(0);
+			result.push_back("");
+			curLineW = 0;
+		}
+		if (std::find(specialTokens.begin(), specialTokens.end(), *it) == specialTokens.end()){
+			result[curLine]+= *it + " ";
+			curLineW += wordW;
+		}
+	}
+	return result;
+}
+
+bool ConvoRenderer::entireConvoTextIsRendered() const
+{
+	return 
+		renderSpeedDivider == 0 ||
+		( ticksAfterAllConvoRendered >= delayAfterConvoRendered 
+		&& entireConvoTextRendered );
 }
 
 void ConvoRenderer::renderConvo(SDL_Renderer* _r, TTF_Font* _f)
-{
-	/* endless spaghetti in this function */
-	SDL_SetRenderDrawColor( _r, 0, 0, 0, 255 );
-	SDL_RenderFillRect( _r, &viewPort );
+{	
+    int fontH;
+    TTF_SizeText(_f, "a", NULL, &fontH);
 
-	/* for stuff like waiting for text promp and arrow when text without answers is done drawing */
-	if (counter % BLINK_DIVIDER == 0) renderBlink = !renderBlink;
+	/* before anything is drawn, reset */
+	if (currentRenderedConvoChars == 0){
+        /* bit wonky to reset here and not in scene, but it be like that*/
+        if (answers.size() > 0){
+            *selectedAnswer = answers.begin()->first;
+        } else {
+            *selectedAnswer = 0;
+        }
+		entireConvoTextRendered = false;
+		currentRenderedConvoCharsOnLine = {};
+		currentRenderedConvoChars = 0;
+		convoLines = {};
+		currentConvoLine = 0;
+		ticksAfterAllConvoRendered = 0;
 
-	/* char for char */
-	if (!entireConvoTextRendered)
-	{
-		/* when divider is set to 0 draw instantly*/
+		convoLines = Visuals::breakLines(_f, text, viewPort, textPadding);
+
+		currentRenderedConvoCharsOnLine.push_back(0);
+
+		/* draw instantly when divider == 0*/
 		if (renderSpeedDivider == 0){
-			currentRenderedConvoChars = text.size();
+			currentConvoLine = convoLines.size() - 1;
 			entireConvoTextRendered = true;
-		} else if (counter % renderSpeedDivider == 0){
-			currentRenderedConvoChars ++;
-			
-			if (currentRenderedConvoChars >= text.size()){
-				ticksAfterAllConvoRendered ++;
-				if (ticksAfterAllConvoRendered > DELAY_AFTER_CONVO_RENDERERED){
-					entireConvoTextRendered = true;
-					ticksAfterAllConvoRendered = 0;
-				} 
-			}
-		}
-	} 
-	std::string textSeg = text.substr(0, currentRenderedConvoChars);
-	
-	//TODO: don't do every frame
-	int charsPerLine = (viewPort.w - textPadding) / (fontH / FONT_CHAR_W_H_RATIO);
-	int nLines = textSeg.size() / charsPerLine + 1;
-
-	if (convoLines.empty()){
-		convoBox = {textPadding, textPadding, viewPort.w - textPadding, viewPort.h - textPadding};
-		auto convoWords = dump_lib::str_split(text, ' ');
-		int j = 0;
-		int curLen = 0;
-		int curLine = 0;
-		convoLines.push_back("");
-		int lineOffset = 0;
-		for(auto word: convoWords){
-			std::string toRender = "";
-			if (word != "<br/>"){
-				toRender = word + " ";
-				curLen += toRender.size();
-				convoLines[curLine] += toRender;
-			} 
-			
-			/* breakline, + 1 for space */
-			if (word =="<br/>" 
-			|| convoWords.size() - 1 > j && (curLen - lineOffset + convoWords[j +1].size() + 1)* (fontH / FONT_CHAR_W_H_RATIO) > viewPort.w - textPadding
-			){
-				//std::cout << "DEBUG: break at " << convoWords[j] << std::endl;
-				lineOffset += convoLines[curLine].size();
-				convoLines.push_back("");
-				curLine++;
-			}
-			j++;
 		}
 	}
 
-	int i = 0;
-	int lineOffset = 0;
-	for(auto line : convoLines){
-		int len = renderText(
-			line.substr(0, currentRenderedConvoChars - lineOffset), 
-			COLOR_DEFAULT, 
-			convoBox.x,
-			convoBox.y + i * fontH, 
-			fontH,
-			_r, _f
-		);
-		
-		if (!prompt){
-			// TODO: can fall off screen now 
-			if (renderBlink && entireConvoTextRendered && answers.empty() && i == convoLines.size()-1){
-				len = renderText(
-					" >", COLOR_DEFAULT, 
-					convoBox.x + len,
-					convoBox.y + i * fontH, 
-					fontH,
-					_r, _f
-				);
-			}
+	SDL_Rect dst;
+	for (int i = 0; i < currentConvoLine + 1; i++){
+	 	int n;
+		 if (renderSpeedDivider > 0){
+			n = currentRenderedConvoCharsOnLine[i];
+		} else {
+			n = convoLines[i].size();
 		}
-		
-		i++;
-		lineOffset += line.size();
-		if (lineOffset > currentRenderedConvoChars)
-			break;
+		dst = renderText(convoLines[i].substr(0, n), COLOR_DEFAULT, textPadding, textPadding + i * fontH, _r, _f);
+
+	}
+	
+	/* Progress char/line TODO: this is messy because needs to instant render when speeddivider == 0, and also set currentRenderedConvoChars, should clean*/
+	if (renderSpeedDivider > 0 && counter % renderSpeedDivider == 0){
+		if (currentRenderedConvoCharsOnLine[currentConvoLine] == convoLines[currentConvoLine].size()){
+			if (convoLines.size() == currentConvoLine + 1){
+				entireConvoTextRendered = true;
+			} else {
+				currentConvoLine ++;
+			}	
+		} else {
+			currentRenderedConvoCharsOnLine[currentConvoLine]++;
+			currentRenderedConvoChars++;
+		}
+	} else if (renderSpeedDivider == 0){
+		currentRenderedConvoChars = text.size();
 	}
 
 	if (entireConvoTextRendered){
-		int i = 0;
-		int y = viewPort.h - fontH - textPadding;
-		int x = textPadding;
-		for (auto answer : answers){
-			SDL_Color answerColor = COLOR_DEFAULT;
-			if (answer.first == *selectedAnswer){
-				answerColor = COLOR_SELECTION;
-			} 
-			renderText(answer.second, answerColor, 
-				x, 
-				y, 
-				fontH,
-				_r, _f
-			);
-			x+= convoBox.w / answers.size();
-		}
-		if (prompt) {
+		if (ticksAfterAllConvoRendered++ < delayAfterConvoRendered){
+			//std::cout << "DEBUG: ticksAfterAllConvoRendered: " << ticksAfterAllConvoRendered << std::endl;
+		} else if (answers.size() > 0){
+			int i = 0;
+			int y = viewPort.h - fontH - textPadding;
+			int x = textPadding;
+			for (auto answer : answers){
+				SDL_Color answerColor = COLOR_DEFAULT;
+				if (answer.first == *selectedAnswer){
+					answerColor = COLOR_SELECTION;
+				} 
+				renderText(answer.second, answerColor, 
+					x, 
+					y, 
+					_r, _f
+				);
+				x+= viewPort.w / answers.size();
+                i++;
+			}
+		} else if (prompt){
+			int y = viewPort.h - fontH - textPadding;
+			int x = textPadding;
 			if (promptText == ""){
 				if (renderBlink){
 					renderText("_", COLOR_DEFAULT,
-						convoBox.x + 25, 
+						x, 
 						y, 
-						fontH,
 						_r, _f
 					);
 				}
 			} else {
 				renderText(promptText, COLOR_DEFAULT,
-					convoBox.x + 25, 
+					x, 
 					y, 
-					fontH,
 					_r, _f
 				);
 			}
+		} else if (renderBlink){
+			int lineW;
+			TTF_SizeText(_f, convoLines[convoLines.size()-1].c_str(), &lineW, NULL);
+			renderText(
+				"  >", COLOR_DEFAULT, 
+				lineW,
+				fontH * currentConvoLine + textPadding,
+				_r, _f
+			);
 		}
 	}
-
+	
+	if (counter % BLINK_DIVIDER == 0) renderBlink = !renderBlink;
 	counter ++;
 }
 
-void Renderer::renderBackground(SDL_Renderer* _r)
+void Renderer::setBackgroundScroll(int speed, Direction dir)
 {
-	if (!background || background->path == "") return;
+	backgroundScrollDir = dir;
+	backgroundScrollSpeed = speed;
+}
+
+void Renderer::renderBackground(SDL_Renderer* _r)
+{	
+	if (background && background->solidColor){
+		auto color = background->color;
+		SDL_SetRenderDrawColor( _r, color.r, color.g, color.b, color.a );
+		SDL_RenderFillRect( _r, &viewPort );
+		return;
+	}
 	
-	if (!backgroundTexture){
-		loadBackgroundTexture(_r);
+	//TODO: when there is no bg and no default bg for renderer, this will look for it everytime, make skipable?
+	if (!background || background->path == ""){
+		if (Visuals::defaultRendererBackgrounds.count(type) > 0){
+			/* copy, because will free when renderer deleted */
+			setBackground(new Background(Visuals::defaultRendererBackgrounds[type]));
+			//std::cout << "DEBUG: USED DEFAULT BG FOR " << type << ": " << background->path << std::endl;
+		} 
+	}
+
+	if (!background){
+		return;
+	}
+
+	auto backgroundTexture = Visuals::loadBackgroundTexture(background->path, _r);
+
+	if (backgroundScrollSpeed > 0){
+		switch(backgroundScrollDir){
+			case UP:
+				background->dst.y =- backgroundScrollSpeed;
+				break;
+			case RIGHT:
+				background->dst.x += backgroundScrollSpeed;
+				break;
+			case DOWN:
+				background->dst.y += backgroundScrollSpeed;
+				break;
+			case LEFT:
+				background->dst.x -= backgroundScrollSpeed;
+		}
 	}
 
 	/* calc offset based on viewport */
@@ -411,7 +531,6 @@ void Renderer::renderBackground(SDL_Renderer* _r)
 			
 			} else {
 				//std::cout << "DEBUG: scrolling left " << std::endl;
-				
 				src.x += (float)src.w * nonIntersectFrag;
 
 				/* tile */
@@ -486,30 +605,30 @@ void Renderer::renderBackground(SDL_Renderer* _r)
 				}
 			}
 		}
+		DEBUG_setCurPos(dst);
 
 		if (SDL_RenderCopy( _r, backgroundTexture, &src, &dst ) < 0){
 			std::cerr << "Could not render background" << std::endl;
 		}
-	} else {
-		/* reset when totally out of view port */
-		if (background->dst.x >= viewPort.w){
-			background->dst.x = 0;
-		} else 	if (background->dst.x + background->dst.w <= 0){
-			background->dst.x += background->dst.w;
-		}
-		if (background->dst.y + background->dst.h <= 0){
-			background->dst.y += background->dst.h;
-		} else if (background->dst.y - background->dst.h <= 0){
-			background->dst.y -= background->dst.h;
-		}
+
+		//DEBUG
+		// SDL_SetRenderDrawColor(_r, 255, 0, 255, 255);
+		// SDL_RenderFillRect(_r, &dst);
+	} 
+	
+	else {
+		background->dst = {0, 0, viewPort.w, viewPort.h};
+
 		/* Draw again immediately stop stop flicker */
 		if (SDL_RenderCopy( _r, backgroundTexture, &background->src, &viewPort ) < 0){
 			std::cerr << "Could not render background" << std::endl;
 		}
-		
 	}
-	// SDL_SetRenderDrawColor(_r, 255, 0, 255, 255);
-	// SDL_RenderDrawRect(_r, &viewPort);
+}
+
+void Renderer::DEBUG_setCurPos(SDL_Rect pos, bool print){
+	print && std::cout << "DEBUG: bg moved " << abs(pos.w - DEBUG_prevPos.w) << std::endl;
+	DEBUG_prevPos = pos;
 }
 
 void ConvoRenderer::resetConvoTextRender()
@@ -519,15 +638,13 @@ void ConvoRenderer::resetConvoTextRender()
 	convoLines = {};
 }
 
-//TODO: place in Visuals
-SDL_Texture* Renderer::loadTexture( std::string path, SDL_Renderer* r)
+SDL_Texture* Visuals::loadTexture( std::string path, SDL_Renderer* r)
 {
     SDL_Texture* newTexture = NULL;
     SDL_Surface* loadedSurface = IMG_Load(path.c_str());
     if (loadedSurface == NULL) {
         std::cerr << sprintf("Graphics: Unable to load image %s! SDL_image Error: %s\n", path.c_str(), IMG_GetError());
-    }
-    else{
+    } else {
         // 0x64, 0x64, 0x64 is color that will be used for transparency because it's somewhat easy to remember
         SDL_SetColorKey(loadedSurface, SDL_TRUE, SDL_MapRGB(loadedSurface->format, 0x64, 0x64, 0x64));
         newTexture = SDL_CreateTextureFromSurface(r, loadedSurface);
@@ -547,15 +664,6 @@ const void Visuals::renderClear() const
     SDL_RenderClear( _r );
 }
 
-void Visuals::loadSpriteSheet(std::string name, std::string path)
-{
-	if (spriteSheets.find(name) != spriteSheets.end()){
-		std::cout << "Debug: Spritesheet '" << name << "' already loaded" << std::endl;
-		return;
-	}
-	spriteSheets[name] = Renderer::loadTexture(path, _r);
-}
-
 void Visuals::renderPresent() const
 {
 	SDL_RenderPresent(_r);
@@ -565,24 +673,23 @@ bool Visuals::render() const
 {
 	renderClear();
 	for (auto renderer : renderers){
-		renderer.second->renderSpecifics(_w, _r, _f);
 		renderer.second->renderBackground(_r);
+		renderer.second->renderSpecifics(_w, _r, _f);
 		renderer.second->renderSprites(_r);
 	}
 	renderPresent();
 }
 void Visuals::addRenderer(std::string rName, Renderer* _renderer)
 {
-	
 	if (renderPrioMap.find(rName) == renderPrioMap.end()){
-		std::cerr << "Tried to add renderer that is not in prio list :" << rName << std::endl;
+		std::cerr << "Tried to add renderer that is not in prio list: " << rName << std::endl;
 		return;
 	}
 	int prio = renderPrioMap.at(rName);
 
-	std::cout << "DEBUG: added renderer '"<< rName <<" 'with prio " << prio << std::endl;
+	//std::cout << "DEBUG: added renderer '"<< rName <<" 'with prio " << prio << std::endl;
 	if (removeRenderer(rName)){
-		std::cout << "DEBUG overwriting renderer with prio " << prio << std::endl;
+		//std::cout << "DEBUG overwriting renderer with prio " << prio << std::endl;
 	}
 	renderers[prio] = _renderer;
 }
@@ -597,7 +704,7 @@ bool Visuals::removeRenderer(std::string rName)
 	int key = renderPrioMap.at(rName);
 
 	if (renderers.find(key) != renderers.end()){
-		std::cout << "DEBUG: removed renderer with prio " << key << std::endl;
+		//std::cout << "DEBUG: removed renderer with prio " << key << std::endl;
 		auto tmp = renderers[key];
 		renderers.erase(key);
 		delete(tmp);
@@ -609,7 +716,7 @@ bool Visuals::removeRenderer(std::string rName)
 void Visuals::removeAllRenderers() 
 {
 	for (auto renderer : renderers){
-		free(renderer.second);
+		delete(renderer.second);
 	}
 	renderers = {};
 }
@@ -645,24 +752,69 @@ bool Visuals::hasRenderer(std::string rName)
 void Renderer::renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f)
 {}
 
-
-const int Renderer::getRelativeCharW(int charH) const
+AtmosphereRenderer::AtmosphereRenderer(SDL_Rect viewPort, LocationData* locationData)
+: Renderer("ATMOSPHERE", viewPort), locationData(locationData)
 {
-	return charH / FONT_CHAR_W_H_RATIO;
+	/* do 1 step on init, so there is something on screen, even when animation is paused on init (which is currently impossible haha) */
+	animationStep();
 }
 
-const int Renderer::getRelativeCharH(int charW) const
+void AtmosphereRenderer::animationStep()
 {
-	return charW * FONT_CHAR_W_H_RATIO;
+	points = {};
+	int maxX = viewPort.x + viewPort.w + 10;
+	int minX = viewPort.x - 10;
+	int maxY = viewPort.y + viewPort.h - 10;
+	int minY = viewPort.y + 10;
+
+
+	int density = locationData->weatherSeverity * 100;
+	for (int i = 0; i < density; i++){
+		points.push_back({
+            dump_lib::random_int_range(minX, maxX),
+            dump_lib::random_int_range(minY, maxY)
+		});
+	}
+}
+
+bool AtmosphereRenderer::renderWeather(SDL_Window* _w, SDL_Renderer* _r)
+{	
+	if (locationData->weather == "NEUTRAL"){
+		return false;
+	}
+
+	/* animate */
+	if (counter % animationSpeedDivider == 0){
+		animationStep();
+	}
+
+	if (locationData->weather == "RAIN"){
+		SDL_SetRenderDrawColor(_r, 0, 0, 255, 255);
+		for (auto point : points){
+			Visuals::renderCircle(_r, point.x, point.y, 2);
+		}
+		return true;
+	}
+	return false;
+}
+
+void AtmosphereRenderer::renderSpecifics(SDL_Window* _w, SDL_Renderer* _r, TTF_Font* _f)
+{
+	if (!locationData->isLocation){
+		return;
+	}
+
+	if (!locationData->indoors){
+		renderWeather(_w, _r);
+	}
+	if (!animationPaused){
+		counter ++;
+	}
 }
 
 ConvoRenderer::ConvoRenderer(int* selectedAnswer, SDL_Rect viewPort, int textPadding)
-: Renderer(viewPort), selectedAnswer(selectedAnswer), textPadding(textPadding)
-{
-	fontH = DEFAULT_FONT_H;
-	characterW = getRelativeCharW(fontH);
-	//convoBox = {0, 0, viewPort.w, viewPort.h};
-}
+: Renderer("CONVO", viewPort), selectedAnswer(selectedAnswer), textPadding(textPadding), delayAfterConvoRendered(10)
+{}
 
 void ConvoRenderer::setText(std::string _text, std::map<int, std::string> _answers, bool _prompt, int _renderSpeedDivider)
 {
@@ -683,19 +835,167 @@ void ConvoRenderer::renderSpecifics(SDL_Window* _w, SDL_Renderer* _r, TTF_Font* 
 	renderConvo(_r, _f);
 }
 
-InventoryRenderer::InventoryRenderer(Inventory* inventory, int* selectedAnswer, bool* itemIsSelected, SDL_Rect viewPort, int textPadding)
-: Renderer(viewPort), selectedAnswer(selectedAnswer), inventory(inventory), itemIsSelected(itemIsSelected), textPadding(textPadding)
+InventoryRenderer::InventoryRenderer(Inventory* inventory, int* selectedAnswer, SDL_Rect viewPort)
+: Renderer("INVENTORY", viewPort), selectedAnswer(selectedAnswer), inventory(inventory)
 {
-	std::cout << "DEBUG: SDF" << std::endl;
+	textPaddingY = 5;
+	textPaddingX = 10;
+
+	int infoPosW = viewPort.w / 2  - 40;
+	int infoPosX = viewPort.w - infoPosW;
+
+	infoPos = {
+		infoPosX, 
+		0,
+		infoPosW,
+		viewPort.h / 2,
+	};
+
+	submenuPos = {
+		infoPos.x,
+		infoPos.h,
+		infoPos.w,
+		viewPort.h / 2,
+	};
+}
+
+const void InventoryRenderer::renderSubmenu(SDL_Renderer* _r, TTF_Font* _f) const
+{
+    int fontH;
+    TTF_SizeText(_f, "a", NULL, &fontH);
+	//DEBUG
+	// SDL_SetRenderDrawColor(_r, 255, 0, 255, 255);
+	// SDL_Rect tmp = {viewPort.x + submenuPos.x,viewPort.y + submenuPos.y, submenuPos.w, submenuPos.h};
+	// SDL_RenderDrawRect(_r, &tmp);
+
+	int x = submenuPos.x + textPaddingX;
+	int y = submenuPos.y + textPaddingY;
+	auto submenuData = inventory->itemWithSubMenuOpen->getInventorySubmenuData();
+
+	renderText(submenuData->getText(), COLOR_DEFAULT,x, y, _r, _f);
+
+	auto answers = submenuData->getAnswers();
+	for (int i =0; i < answers.size();i++){
+		y+= fontH;
+		SDL_Color c = COLOR_DEFAULT;
+		if (i == *selectedAnswer){
+			c = COLOR_SELECTION;
+		}
+		renderText(answers[i].second,c ,x, y, _r, _f);
+	}
+}
+
+const void InventoryRenderer::renderItemInfo(SDL_Renderer* _r, TTF_Font* _f) const
+{
+    int fontH;
+    TTF_SizeText(_f, "a", NULL, &fontH);
+	//DEBUG
+	// SDL_SetRenderDrawColor(_r, 123, 123, 300, 255);
+	// SDL_Rect tmp = {viewPort.x + infoPos.x,viewPort.y + infoPos.y, infoPos.w, infoPos.h};
+	// SDL_RenderDrawRect(_r, &tmp);
+
+	int x = infoPos.x + textPaddingX;
+	int y = textPaddingY;
+
+	Item* toRender = NULL;
+	if (!inventory->submenuIsOpen()){
+		int i = 0;
+		//TODO: use find if or something
+		for (auto item : inventory->getItems()){
+			if (i == *selectedAnswer){
+				toRender = item.second.first;
+				break;
+			}
+			i++;
+		}
+	} else {
+		toRender = inventory->itemWithSubMenuOpen;
+	}
+	if (!toRender){
+		return;
+	}
+	auto lines = Visuals::breakLines(_f, toRender->description, infoPos, textPaddingX);
+	for (auto line : lines){
+		renderText(line, COLOR_DEFAULT, x, y, _r, _f);
+		y+= fontH;
+	}
 }
 
 void InventoryRenderer::renderSpecifics(SDL_Window* _w, SDL_Renderer* _r, TTF_Font* _f)
 {
 	renderInventory(_r, _f);
+	renderItemInfo(_r, _f);
+	if (inventory->submenuIsOpen()){
+		renderSubmenu(_r, _f);
+	}
 }
 
+StatusBarRenderer::StatusBarRenderer(SDL_Rect viewPort, std::string locationName, Character* player)
+: Renderer("STATUS", viewPort), locationName(locationName), player(player)
+{}
+
+void StatusBarRenderer::renderStatusBar(SDL_Renderer* _r, TTF_Font* _f)
+{
+	if (blackout) return;
+
+    int fontH;
+    TTF_SizeText(_f, "a", NULL, &fontH);
+
+	int textBaseX = viewPort.x + 5;
+	int textBaseY = viewPort.y + 0;
+
+	int x = viewPort.x;
+	int y = viewPort.y;
+    // SDL_SetRenderDrawColor( _r, 255, 0, 255, 255 );
+	// SDL_Rect rect = {x, y, viewPort.w -x, viewPort.h - y};
+	// SDL_RenderDrawRect(_r, &rect);
+
+	x = textBaseX;
+	y = textBaseY;
+	renderText("Location: " + locationName, {255, 255, 255}, x, y, _r, _f);
+	x += viewPort.w / 2;
+	renderText(Time::currentDateString(), {255, 255, 255}, x, y, _r, _f);
+
+	y+= fontH;
+
+	renderStatusBarSpecific(_r, _f, textBaseX, y);
+}
+
+void StatusBarRenderer::renderStatusBarSpecific(SDL_Renderer*_r, TTF_Font* _f, int x, int y)
+{
+	renderPlayerStatus(_r, _f, x, y);
+}
+
+void StatusBarRenderer::renderPlayerStatus(SDL_Renderer*_r, TTF_Font* _f, int x, int y)
+{
+	if (!player){
+		//std::cout << "DEBUG: StatusBarRenderer::player == NULL, can't render player status" << std::endl;
+		exit(1);
+	}
+
+    int fontH;
+    TTF_SizeText(_f, "a", NULL, &fontH);
+
+	int textBaseX = x;
+	y += fontH - fontH /4; 
+	renderText(player->name, COLOR_DEFAULT, x, y, _r, _f);
+	x+= viewPort.w / 2;
+	renderText(player->status, COLOR_DEFAULT, x, y, _r, _f);
+}
+
+void StatusBarRenderer::renderSpecifics(SDL_Window* w, SDL_Renderer* r, TTF_Font* f)
+{
+	renderStatusBar(r, f);
+}
+
+void StatusBarRenderer::setBlackout(bool _blackout)
+{
+	blackout = _blackout;
+}
+
+
 TransitionRenderer::TransitionRenderer(ChangeSceneAction* action, SDL_Rect viewPort, int length)
-:Renderer(viewPort), a(action), length(length)
+:Renderer("TRANSITION", viewPort), a(action), length(length)
 {}
 
 void TransitionRenderer::renderSpecifics(SDL_Window* _w, SDL_Renderer* _r, TTF_Font* _f)
@@ -711,7 +1011,7 @@ ChangeSceneAction* TransitionRenderer::done()
 }
 
 FadeoutRenderer::FadeoutRenderer(ChangeSceneAction* action, SDL_Rect viewPort, uint8_t speed)
-:Renderer(viewPort), a(action), speed(speed)
+:Renderer("FADE_OUT", viewPort), a(action), speed(speed)
 {}
 
 void FadeoutRenderer::renderSpecifics(SDL_Window* _w, SDL_Renderer* _r, TTF_Font* _f)
@@ -738,7 +1038,7 @@ bool Visuals::initSDL()
 		return false;
 	}
 
-	_r = SDL_CreateRenderer( _w, -1, SDL_RENDERER_ACCELERATED );
+	_r = SDL_CreateRenderer( _w, -1,  SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC );
 	if( _r == NULL ){
 		std::cerr << "Could not create renderer: " << SDL_GetError() << std::endl;	
 		return false;
@@ -759,7 +1059,8 @@ bool Visuals::initSDL()
 		std::cerr << "Could not init SDL_font: " << SDL_GetError() << std::endl;	
 		return false;
 	}
-	_f = TTF_OpenFont( "assets/OpenSans-Regular.ttf", 28 );
+	//_f = TTF_OpenFont( "assets/OpenSans-Regular.ttf", fontH);
+	_f = TTF_OpenFont( fontPath.c_str(), fontSize);
 	if( _f == NULL ){
 		std::cerr << "Failed to load font: " << TTF_GetError() << std::endl;	
         return false;
@@ -782,7 +1083,7 @@ bool Visuals::addRenderPrio(std::string rendererName, int prio)
 
 bool Visuals::createWindow(std::string title)
 {
-    _w = SDL_CreateWindow( title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_W, SCREEN_H, SDL_WINDOW_SHOWN );
+    _w = SDL_CreateWindow( title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screenW, screenH, SDL_WINDOW_SHOWN );
         if( _w == NULL ){
             std::cerr <<  "Window could not be created! SDL Error: " << SDL_GetError() << std::endl;
             return false;
@@ -790,26 +1091,76 @@ bool Visuals::createWindow(std::string title)
 	return true;
 }
 
-Visuals::Visuals()
+Visuals::Visuals(int screenW, int screenH, std::string fontPath, int fontSize)
+:fontPath(fontPath), fontSize(fontSize)
 {
+    setScreenSize(screenW, screenH);
+
 	if (!initSDL()){
 		exit(1);
 	}
 }
 
 Visuals::~Visuals()
-{
-	//TODO: exit subsytems like font
-	for (auto& it: spriteSheets) {
+{	
+	for (auto& texture : backgroundTextureMap){
+		if (texture.second){
+			SDL_DestroyTexture(texture.second);
+		}
+	}
+
+	for (auto& it: spriteSheetTextureMap) {
     	SDL_DestroyTexture(it.second);
 	}
+	
 	for (auto renderer : renderers){
 		delete(renderer.second);
 	}
+
+	for (auto bg : defaultRendererBackgrounds){
+		if (bg.second){
+			delete(bg.second);
+		}
+	}
+
     SDL_DestroyRenderer( _r );
     SDL_DestroyWindow( _w );
     _r = NULL;
     _w = NULL;
+    TTF_Quit();
     IMG_Quit();
     SDL_Quit();
 }
+
+void Visuals::setScreenSize(int w, int h)
+{
+    std::cout << "TODO: (setScreenSize) Change actual window size if window was created" << std::endl; 
+    std::cout << "TODO: (setScreenSize) Change viewPorts in active scene" << std::endl; 
+
+    screenW = w;
+    screenH = h;
+
+
+    //int convoBarH =  h / 6;
+    // VIEW_PORT_FULL_SCREEN = {0, 0, w, h};
+    // VIEW_PORT_DEFAULT_STATUS_BAR = {0, 0, w, h/6};
+    // VIEW_PORT_DEFAULT_CONVO_BAR = {0, h - h/6, w, h - h/6};
+
+
+    VIEW_PORT_FULL_SCREEN = {0, 0, w, h};
+    VIEW_PORT_DEFAULT_CONTENT = {0,  h/9, w, h -  h/9 - h /7};
+    VIEW_PORT_DEFAULT_STATUS_BAR = {0, 0, w, h/9};
+    VIEW_PORT_DEFAULT_INVENTORY = {0,  w/9, w, h - h/9};
+    VIEW_PORT_DEFAULT_CONVO_BAR = {0, h - h/6, w, h/6};
+}
+
+std::pair<int, int> Visuals::getScreenSize()
+{
+    return {screenW, screenH};
+}
+
+SDL_Rect Visuals::VIEW_PORT_FULL_SCREEN = {};
+SDL_Rect Visuals::VIEW_PORT_DEFAULT_CONVO_BAR = {};
+SDL_Rect Visuals::VIEW_PORT_DEFAULT_STATUS_BAR = {};
+SDL_Rect Visuals::VIEW_PORT_DEFAULT_INVENTORY = {};
+SDL_Rect Visuals::VIEW_PORT_DEFAULT_CONTENT = {};

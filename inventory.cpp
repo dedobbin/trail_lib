@@ -1,4 +1,6 @@
 #include "inventory.hpp"
+#include <iostream>
+#include <algorithm>
 
 itemListen_t Inventory::getItems()
 {
@@ -34,4 +36,34 @@ bool Inventory::decrease(std::string type, int amount)
 		}
 		return true;
 	}
+}
+
+std::vector<Action*> Inventory::useItem(itemType_t type, UseItemParams params, int amount)
+{
+	std::vector<Action*> triggeredActions;
+	for (auto it = items.begin(); it != items.end(); it++){
+		if (it->first == type && it->second.second >= amount){
+			for (int i = 0; i < amount; i++){
+				auto action = items[type].first->use(params);
+				if (action){
+					triggeredActions.push_back(action);
+				}
+			}
+			decrease(type, amount);
+			return triggeredActions;
+		}
+	}
+	//std::cout << "DEBUG: cannot use " << amount << " " << type << ", not enough in inventory" << std::endl;
+	return {};
+}
+
+int Inventory::size()
+{
+	return items.size();
+}
+
+bool Inventory::submenuIsOpen()
+{
+	return itemWithSubMenuOpen != NULL 
+		&& itemWithSubMenuOpen->getInventorySubmenuData(); 
 }

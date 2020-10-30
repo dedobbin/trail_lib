@@ -7,6 +7,11 @@
 #include "time.hpp"
 #include "type.hpp"
 
+/* circ dep for StartConvoAction, forward declare */
+class Convo;
+
+typedef std::unordered_map<sceneArgsKey_t, long> SceneInitArgs_t;
+
 #define DEFAULT_TRANSITION_LENGTH 2
 
 class Action
@@ -20,33 +25,38 @@ class Action
 class ChangeSceneAction : public Action
 {
 	public:
-		/*Skip game over check can be used so party is dead, yet no game over fadeout happend, used in game over cutscene*/
 		ChangeSceneAction(sceneType_t sceneType, sceneId_t id);
-		ChangeSceneAction(sceneType_t sceneType, sceneId_t id, bool skipGameOverCheck);
 		const sceneType_t sceneType;
 		const sceneId_t id = 0;
 		
 		/* Optional args */
-		bool skipGameOverCheck = false;
+		SceneInitArgs_t sceneInitArgs;
+
 };
 
 /* Set a convoAction, not an action to set convo ..*/
 class SetConvoActionTrigger : public Action
 {
 	public:
-		SetConvoActionTrigger(int textId, Action* action, int answerId = 0);
+		/* When convo id < 0, uses defaultConvo, when scene < 0 uses currentScene (in Game)*/
+		SetConvoActionTrigger(int textId, Action* action, int answerId = 0, int convoId = -1, sceneId_t sceneId = -1);
 		const int textId;
 		const int answerId;
 		Action* action;
+		const int convoId;
+		const sceneId_t sceneId;
 };
 
 class LinkTexts : public Action
 {
 	public:
-		LinkTexts(int srcText, int dstText, int answer = 0);
+		/* When convo id < 0, uses defaultConvo, when scene < 0 uses currentScene (in Game) */
+		LinkTexts(int srcText, int dstText, int answer = 0, int convoId = -1, int sceneId_t = -1);
 		const int srcText;
 		const int dstText;
 		const int answer;
+		const int convoId;
+		const sceneId_t sceneId;
 };
 
 /* Changes a text of active convo */
@@ -54,9 +64,12 @@ class LinkTexts : public Action
 class SetText : public Action
 {
 	public:
-		SetText(int convoId, std::string text);
+		/* When convo id < 0, uses defaultConvo, when scene < 0 uses currentScene */
+		SetText(int textId, std::string text, int convoId = -1, sceneId_t sceneId = -1);
 		const int textId;
 		const std::string text;
+		const int convoId;
+		const int sceneId;
 };
 
 class AdvanceTimeAction : public Action 
@@ -94,11 +107,31 @@ class SetSelectedAnswer : public Action
 class ConvoEntryPointArgs: public Action
 {
 	public:
-		ConvoEntryPointArgs(int convo, int entryPoint);
-		const int convo;
+		/* if convoId < 0, default convo is used, if sceneId < 0 currentScene is used (in Game)*/
+		ConvoEntryPointArgs(int entryPoint, int convoId = -1, sceneId_t sceneId = -1);
+		const int convoId;
+		const int sceneId;
 		const int entryPoint;
 };
 
+class ChangeConvoSpeed : public Action
+{
+	public:
+		ChangeConvoSpeed(int val);
+		const int val;
+};
 
+class StartConvo : public Action
+{
+	public:
+		/* when convo is set, convoId is ignored, otherwise start convo with that id and entryPoint is ignored */
+		StartConvo(int convoId, bool interrupt = true, bool forceCloseInventory = true);
+		StartConvo(Convo* convo, int entryPoint = 0, bool interrupt = true, bool forceCloseInventory = true);
+		const int convoId;
+		Convo* convo = NULL;
+		const bool forceCloseInventory;
+		const int entryPoint;
+		const bool interrupt;
+};
 
 #endif

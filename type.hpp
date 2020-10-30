@@ -14,5 +14,10 @@ typedef int sceneId_t;
 typedef std::string sceneType_t;
 typedef std::string actionType_t;
 typedef std::string itemType_t;
+typedef std::string characterStatus_t;
+typedef std::string inventorySubmenuType_t;
+typedef std::string rendererType_t;
+typedef std::string weatherType_t;
+typedef std::string sceneArgsKey_t;
 
 #endif

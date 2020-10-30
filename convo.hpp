@@ -15,9 +15,10 @@ class Convo{
 			std::map<int, std::string> answers;
 			bool prompt = false;
 		};
-		Convo();
+		Convo(int entryPoint = 0);
 		~Convo();
 		void addText(int id, Text text, bool overwriteAnswers = true);
+		void addAnswer(int textId, int answerId, std::string text);
 		//TODO: multiple links in 1 call?
 		void linkTexts(int src, int dst, int answer = 0);
 		void setAction(int textId, Action* action, int answer = 0);
@@ -25,15 +26,14 @@ class Convo{
 		/* return next text ID, negative is there is none */
 		int nextTextId(int selectedAnswer);
 		std::vector<Action*> getLinkedActions(int selectedAnswer);
-		void setActionText(int id);
 		void setActiveText(int id);
+		int getActiveTextId();
 		std::pair<int, Text> current();
 		void print();
 		/* Mainly for debug */
 		std::map<int, Text> getTexts();
 		Text getText(int id);
-		bool active();
-		void end();
+		int entryPoint = 0;
 	private:
 		int activeTextId;
 		std::map <int, Text> texts;

@@ -4,15 +4,21 @@
 #include <string.h> //memcpy
 #include "convo.hpp"
 
-Convo::Convo():
-texts (texts)
+Convo::Convo(int entryPoint)
+: texts (texts), entryPoint(entryPoint)
 {
 	activeTextId = -1;
 }
 
 Convo::~Convo()
 {
-	//TODO: free all actions in actionmap
+	for (auto entry : actionMap){
+		for (auto actions : entry.second){
+			for (auto action : actions.second){
+				delete(action);
+			}	
+		}
+	}
 }
 
 void Convo::linkTexts(int src, int dst, int answer)
@@ -65,6 +71,16 @@ void Convo::setActiveText(int id)
 	activeTextId = id;
 }
 
+void Convo::addAnswer(int textId, int answerId, std::string text)
+{
+	texts[textId].answers[answerId] = text;
+}
+
+int Convo::getActiveTextId()
+{
+	return activeTextId;
+}
+
 int Convo::nextTextId(int selectedAnswer)
 {
 	if (links.find(activeTextId) != links.end() && links.at(activeTextId).find(selectedAnswer) != links.at(activeTextId).end()){
@@ -87,7 +103,7 @@ std::vector<Action*> Convo::getLinkedActions(int selectedAnswer)
 
 std::vector<Action*> Convo::progress(int selectedAnswer)
 {
-	std::string debugStr = "DEBUG convo progress " +  std::to_string(activeTextId) + " -> "; 
+	std::string debugStr = "DEBUG: convo progress " +  std::to_string(activeTextId) + " -> "; 
 
 	/* check if convo progression is linked to an action */
 	std::vector<Action*> triggeredActions = getLinkedActions(selectedAnswer);
@@ -97,16 +113,16 @@ std::vector<Action*> Convo::progress(int selectedAnswer)
 
 	/* if getLinkedAction() returned NULL (no action) and there is no next text, end convo*/
 	if (tmp < 0){
-		end();
+		triggeredActions.push_back(new Action("END_CONVO"));
 	} 
 
 	/* if current text doesn't exist and no action is set, end convo */
 	if (texts.find(activeTextId) == texts.end()){
-		end();
+		triggeredActions.push_back(new Action("END_CONVO"));
 	}
 
 	/* Certain actions, you don't want to progress convo */
-	/* TODO: make dynamic no-progress action list */
+	/* TODO: make dynamic no-progress action list, this is pretty wonky all together */
 	for (auto a : triggeredActions){
 		if (
 			// a->actionType == ActionType::INN_REST ||
@@ -125,7 +141,7 @@ std::vector<Action*> Convo::progress(int selectedAnswer)
 	activeTextId = tmp;
 
 	debugStr += std::to_string(activeTextId) + " (answer: " + std::to_string(selectedAnswer) + ")";
-	std::cout << debugStr << std::endl;
+	//std::cout << debugStr << std::endl;
 	
 	return triggeredActions;
 }
@@ -206,14 +222,4 @@ void Convo::print()
 std::map<int, Convo::Text> Convo::getTexts()
 {
 	return texts;
-}
-
-void Convo::end()
-{
-	activeTextId = -1;
-}
-
-bool Convo::active()
-{
-	return !(activeTextId < 0);
 }
