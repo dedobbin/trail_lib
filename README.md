@@ -5,5 +5,6 @@ This is not the development repo but code mirror.
 ## TODO
 - Code examples on how to use the library.
 - Smart pointers.
+- Minimize/research cache indirection caused by maps 
 - Player class. Currently the client has to take care of implementing this.
 - Items default behaviour should be with player class. Currently the client has to take of implementing item behaviour.
